@@ -1,0 +1,76 @@
+name: Run test-srv
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Java 17
+        uses: actions/setup-java@v2
+        with:
+          java-version: 17
+          distribution: 'zulu'
+      - name: ngrok
+        shell: bash
+        run: |
+          wget https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-linux-amd64.zip
+          unzip -qq ngrok-stable-linux-amd64.zip
+          ./ngrok authtoken ${{ secrets.NGROK_AUTHTOKEN }}
+          ./ngrok tcp -region=eu 25565 &
+      - name: webhook
+        shell: bash
+        run: |
+          python3 ./webhook.py "${{ secrets.WEBHOOK }}"
+      - name: add key
+        run: |
+          eval "$(ssh-agent -s)"
+          mkdir -p ~/.ssh/
+          cat << EOF > ~/.ssh/id_ed25519_a
+          ${{ secrets.SSH_KEY }}
+          EOF
+          sudo chown $USER:$USER ~/.ssh/id_ed25519_a
+          sudo chmod 600 ~/.ssh/id_ed25519_a
+          ssh-add ~/.ssh/id_ed25519_a
+          cat << EOF > ~/.ssh/config
+          Host github.com
+          User git
+          Port 22
+          Hostname github.com
+          IdentityFile ~/.ssh/id_ed25519_a
+          TCPKeepAlive yes
+          IdentitiesOnly yes
+          EOF
+      - name: clone
+        run: |
+          git clone git@github.com:mc-ukbfx/server-data.git
+          sudo chown -R $USER:$USER server-data
+          sudo chmod -R 777 server-data
+      - name: run
+        shell: bash
+        run: |
+          cd server-data
+          chmod +x start.sh
+          timeout 5h ./start.sh > null || echo 
+      - name: commit
+        run: |
+          cd server-data
+          git config user.name "Server"
+          git config user.email "null"
+          git add world/*
+          git add config/*
+          git add whitelist.json
+          git add ops.json
+          git add banned-*.json
+          git add */luckperms-h2.mv.db
+          git add ./*.properties
+          git commit -m 'update world data'
+          git push
+      - name: cleanup
+        if: always()
+        run: |
+          eval "$(ssh-agent -s)"
+          ssh-add -D ~/.ssh/id_ed25519_a
+          rm ~/.ssh/id_ed25519_a
